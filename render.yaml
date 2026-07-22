@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: autofyi-mcp
+    runtime: python
+    plan: starter
+    buildCommand: pip install .
+    startCommand: autofyi-mcp
+    healthCheckPath: /healthz
+    numInstances: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.4
+      - key: AUTOFYI_MCP_TRANSPORT
+        value: streamable-http
+      # The MCP endpoint becomes /mcp/<this value>. Treat it like a password.
+      - key: AUTOFYI_MCP_PATH_SECRET
+        generateValue: true
+      - key: AUTOFYI_API_BASE
+        value: https://autofyi.kellyautomations.com
+      # Financial writes stay off until flipped deliberately in the dashboard.
+      - key: AUTOFYI_ENABLE_WRITES
+        value: "false"
+      - key: AUTOFYI_READ_TIMEOUT_SECONDS
+        value: "600"
+      # Optional: Cloudflare Access service token protecting the tunnel.
+      - key: AUTOFYI_CF_ACCESS_CLIENT_ID
+        sync: false
+      - key: AUTOFYI_CF_ACCESS_CLIENT_SECRET
+        sync: false
