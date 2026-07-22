@@ -30,6 +30,7 @@ class Settings:
     http_host: str = "0.0.0.0"
     http_port: int = 8000
     http_path_secret: str = ""
+    auth_tokens: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -49,6 +50,9 @@ class Settings:
             http_host=os.getenv("AUTOFYI_MCP_HOST", "0.0.0.0").strip(),
             http_port=int(os.getenv("PORT", os.getenv("AUTOFYI_MCP_PORT", "8000"))),
             http_path_secret=os.getenv("AUTOFYI_MCP_PATH_SECRET", "").strip(),
+            auth_tokens=tuple(
+                t.strip() for t in os.getenv("AUTOFYI_MCP_AUTH_TOKENS", "").split(",") if t.strip()
+            ),
         )
 
     def streamable_http_path(self) -> str:

@@ -110,11 +110,11 @@ Cloudflare tunnel; Render only hosts this MCP layer in front of it.
 Team Claude clients ──HTTPS──> Render (this MCP) ──HTTPS──> Cloudflare tunnel ──> local backend ──> FYI
 ```
 
-Deploy with the [render.yaml](render.yaml) blueprint; full steps, team connection
-instructions, operating rules, and troubleshooting are in
-[docs/DEPLOY.md](docs/DEPLOY.md). The team URL is
-`https://<service>.onrender.com/mcp/<AUTOFYI_MCP_PATH_SECRET>` — the full URL is the
-credential, so share it privately and rotate the secret in Render to revoke.
+Deploy with the [render.yaml](render.yaml) blueprint; full steps, operating rules, and
+troubleshooting are in [docs/DEPLOY.md](docs/DEPLOY.md). The team endpoint is
+`https://<service>.onrender.com/mcp`, protected by per-teammate bearer tokens
+(`AUTOFYI_MCP_AUTH_TOKENS`). Per-client connection instructions — Claude Desktop, Claude
+Code, Cursor, claude.ai web, ChatGPT — are in [docs/HOST.md](docs/HOST.md).
 
 ## Enabling financial writes
 
@@ -139,6 +139,7 @@ It also supports an optional backend bearer token through `AUTOFYI_API_TOKEN`.
 ## Documentation
 
 - [Deploy to Render](docs/DEPLOY.md)
+- [Connect a client to the hosted server](docs/HOST.md)
 - [Tool reference](docs/TOOLS.md)
 - [Reference user flows](docs/USER_FLOWS.md)
 - [Edge and corner cases](docs/EDGE_CASES.md)

@@ -56,11 +56,14 @@ for the current MCP process; durable auditing belongs in protected backend logs.
 ## Streamable HTTP hosting
 
 `AUTOFYI_MCP_TRANSPORT=streamable-http` serves the same server remotely (see `render.yaml`).
-Access control is a mandatory secret URL path: the endpoint is `/mcp/<AUTOFYI_MCP_PATH_SECRET>`
-and the server refuses to start HTTP without the secret. A path secret is used instead of a
-header so claude.ai custom connectors, Claude Desktop, and Claude Code can all connect with a
-plain URL. TLS is terminated by the host (Render). `/healthz` is unauthenticated and reveals
-nothing.
+Access control is mandatory and the server refuses to start HTTP without it. The default is
+bearer tokens (`AUTOFYI_MCP_AUTH_TOKENS`, comma-separated, one per teammate, compared in
+constant time by an ASGI middleware) on the `/mcp` endpoint — the same pattern as the team's
+other hosted MCPs, bridged into stdio clients via `mcp-remote`. The alternative for clients
+that cannot send headers (claude.ai web, ChatGPT connectors) is a secret URL path
+(`AUTOFYI_MCP_PATH_SECRET`, endpoint `/mcp/<secret>`) with tokens left empty; when tokens are
+set they are required on every request. TLS is terminated by the host (Render). `/healthz` is
+unauthenticated and reveals nothing.
 
 The confirmation store remains in-process, so the hosted deployment must stay at exactly one
 instance; a restart still safely invalidates pending confirmations. All team members share that

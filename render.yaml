@@ -12,8 +12,9 @@ services:
         value: 3.13.4
       - key: AUTOFYI_MCP_TRANSPORT
         value: streamable-http
-      # The MCP endpoint becomes /mcp/<this value>. Treat it like a password.
-      - key: AUTOFYI_MCP_PATH_SECRET
+      # Comma-separated bearer tokens, one per teammate. Clients send
+      # "Authorization: Bearer <token>". Starts with one generated token.
+      - key: AUTOFYI_MCP_AUTH_TOKENS
         generateValue: true
       - key: AUTOFYI_API_BASE
         value: https://autofyi.kellyautomations.com

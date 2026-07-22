@@ -20,29 +20,28 @@ git push -u origin main
 
 1. Render Dashboard → **New → Blueprint** → select the repository.
 2. `render.yaml` provisions everything: a single Starter web service, transport
-   `streamable-http`, a generated `AUTOFYI_MCP_PATH_SECRET`, health checks on `/healthz`,
-   and `AUTOFYI_ENABLE_WRITES=false`.
+   `streamable-http`, a generated first bearer token in `AUTOFYI_MCP_AUTH_TOKENS`, health
+   checks on `/healthz`, and `AUTOFYI_ENABLE_WRITES=false`.
 3. Leave the two `AUTOFYI_CF_ACCESS_*` prompts blank unless Cloudflare Access is set up.
 4. Deploy and wait for the service to go live.
 
-## 3. Get the team URL
+## 3. Set up team tokens
 
-Open the service → **Environment** tab → copy `AUTOFYI_MCP_PATH_SECRET`. The team URL is:
+The endpoint is `https://<service-name>.onrender.com/mcp` and every request must send
+`Authorization: Bearer <token>`.
 
-```text
-https://<service-name>.onrender.com/mcp/<AUTOFYI_MCP_PATH_SECRET>
-```
-
-The full URL is the credential. Share it privately. To revoke access, change the secret in
-the Environment tab and share the new URL.
+Open the service → **Environment** tab → `AUTOFYI_MCP_AUTH_TOKENS`. It starts with one
+generated token; make it one token per teammate (comma-separated), generated with
+`openssl rand -hex 24`. Give each person the URL plus only their own token — revoking one
+person is then just deleting their token.
 
 ## 4. Connect each teammate
 
-- **claude.ai / Claude Desktop**: Settings → Connectors → Add custom connector → paste the URL.
-- **Claude Code**:
+Full per-client instructions (Claude Desktop, Claude Code, Cursor, claude.ai web, ChatGPT)
+are in [HOST.md](HOST.md). The short version for Claude Code:
 
 ```bash
-claude mcp add --transport http --scope user autofyi https://<service-name>.onrender.com/mcp/<secret>
+claude mcp add --transport http --scope user autofyi https://<service-name>.onrender.com/mcp --header "Authorization: Bearer YOUR_TOKEN_HERE"
 ```
 
 Quick verify inside Claude: run the `autofyi_health` tool. `browser: open` means the local
@@ -68,8 +67,8 @@ The Render service is only a front door. Every tool call still depends on the lo
 
 | Symptom | Meaning | Fix |
 | --- | --- | --- |
-| Connector fails to add | Wrong URL or secret | Re-copy the secret from Render Environment |
-| 404 from the MCP URL | Secret segment wrong | Use `/mcp/<exact secret>` |
+| Connector fails to add | Wrong URL or token | Re-check the URL and your bearer token |
+| 401 unauthorized | Token missing, mistyped, or revoked | Compare with `AUTOFYI_MCP_AUTH_TOKENS` in Render |
 | `autofyi_health` shows browser closed | FYI session logged out | Log in on the local machine |
 | Tools time out | Tunnel or backend down on the local machine | Restart backend + `cloudflared` |
 | Everything broke after redeploy | Pending confirmations cleared | Re-prepare the action |

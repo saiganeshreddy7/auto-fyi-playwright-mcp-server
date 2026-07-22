@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import sys
 from typing import Literal
 
@@ -238,10 +239,40 @@ async def execute_confirmed_action(confirmation_id: str, user_confirmation: str)
     return await service.execute_confirmed_action(confirmation_id, user_confirmation)
 
 
+class BearerAuthMiddleware:
+    """Reject every request except /healthz unless it carries a configured bearer token."""
+
+    def __init__(self, app, tokens: tuple[str, ...]) -> None:
+        self.app = app
+        self.tokens = tokens
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope.get("path") == "/healthz":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        if self._valid(headers.get(b"authorization", b"").decode("latin-1")):
+            await self.app(scope, receive, send)
+            return
+        response = JSONResponse(
+            {"error": "unauthorized"},
+            status_code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        await response(scope, receive, send)
+
+    def _valid(self, authorization: str) -> bool:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer":
+            return False
+        token = token.strip()
+        return any(secrets.compare_digest(token, known) for known in self.tokens)
+
+
 def main() -> None:
-    if settings.transport != "stdio" and not settings.http_path_secret:
+    if settings.transport != "stdio" and not (settings.auth_tokens or settings.http_path_secret):
         logger.error(
-            "AUTOFYI_MCP_PATH_SECRET is required for transport=%s. "
+            "Set AUTOFYI_MCP_AUTH_TOKENS and/or AUTOFYI_MCP_PATH_SECRET for transport=%s. "
             "Refusing to expose an unauthenticated financial MCP endpoint.",
             settings.transport,
         )
@@ -252,13 +283,23 @@ def main() -> None:
         settings.api_base,
         settings.enable_writes,
     )
-    if settings.transport != "stdio":
-        logger.info(
-            "Serving MCP on %s:%s at /mcp/<AUTOFYI_MCP_PATH_SECRET>",
-            settings.http_host,
-            settings.http_port,
-        )
-    mcp.run(transport=settings.transport)
+    if settings.transport == "stdio":
+        mcp.run(transport="stdio")
+        return
+
+    import uvicorn
+
+    logger.info(
+        "Serving MCP on %s:%s path=%s auth=%s",
+        settings.http_host,
+        settings.http_port,
+        "/mcp/<secret>" if settings.http_path_secret else "/mcp",
+        f"{len(settings.auth_tokens)} bearer token(s)" if settings.auth_tokens else "path secret",
+    )
+    app = mcp.streamable_http_app()
+    if settings.auth_tokens:
+        app.add_middleware(BearerAuthMiddleware, tokens=settings.auth_tokens)
+    uvicorn.run(app, host=settings.http_host, port=settings.http_port, log_level="info")
 
 
 if __name__ == "__main__":
