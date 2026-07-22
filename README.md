@@ -110,33 +110,11 @@ Cloudflare tunnel; Render only hosts this MCP layer in front of it.
 Team Claude clients ──HTTPS──> Render (this MCP) ──HTTPS──> Cloudflare tunnel ──> local backend ──> FYI
 ```
 
-Deploy:
-
-1. Push this repository to GitHub.
-2. In Render: New → Blueprint → select the repo. [render.yaml](render.yaml) provisions a
-   Starter web service, generates `AUTOFYI_MCP_PATH_SECRET`, and keeps writes disabled.
-3. After deploy, read the generated secret from the service's Environment tab. The team URL is:
-   `https://<service>.onrender.com/mcp/<AUTOFYI_MCP_PATH_SECRET>`
-
-Connect (each teammate):
-
-- claude.ai / Claude Desktop: Settings → Connectors → Add custom connector → paste the URL.
-- Claude Code:
-
-```bash
-claude mcp add --transport http --scope user autofyi https://<service>.onrender.com/mcp/<secret>
-```
-
-Rules for the hosted server:
-
-- The full URL is the credential. Share it privately; rotate the secret in Render to revoke.
-- Run exactly one instance and do not autoscale: confirmations are in-memory and the backend
-  browser queue is serialized.
-- A redeploy or restart clears pending prepared actions; prepare them again. This is by design.
-- The local machine must stay awake with `cloudflared` and the AutoFYI backend running and the
-  FYI browser session logged in; otherwise tools return a clear health error.
-- Keep `AUTOFYI_ENABLE_WRITES=false` until the path secret (and ideally Cloudflare Access on
-  the tunnel) is verified end to end.
+Deploy with the [render.yaml](render.yaml) blueprint; full steps, team connection
+instructions, operating rules, and troubleshooting are in
+[docs/DEPLOY.md](docs/DEPLOY.md). The team URL is
+`https://<service>.onrender.com/mcp/<AUTOFYI_MCP_PATH_SECRET>` — the full URL is the
+credential, so share it privately and rotate the secret in Render to revoke.
 
 ## Enabling financial writes
 
@@ -160,6 +138,7 @@ It also supports an optional backend bearer token through `AUTOFYI_API_TOKEN`.
 
 ## Documentation
 
+- [Deploy to Render](docs/DEPLOY.md)
 - [Tool reference](docs/TOOLS.md)
 - [Reference user flows](docs/USER_FLOWS.md)
 - [Edge and corner cases](docs/EDGE_CASES.md)
