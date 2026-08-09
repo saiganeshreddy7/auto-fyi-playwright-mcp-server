@@ -332,3 +332,75 @@ async def test_write_timeout_is_unknown_and_not_retried(fake_api, read_settings)
     )
     assert result["state"] == "outcome_unknown_do_not_retry"
     assert len(fake_api.write_calls) == 1
+
+
+async def test_preview_split_from_invoices_no_plan_client(fake_api, read_settings) -> None:
+    service = AutoFYIService(fake_api, read_settings)
+    result = await service.preview_split_from_invoices(
+        "C-200",
+        [
+            {
+                "reference": "INV-1",
+                "date": "01 Jul 2026",
+                "lines": [
+                    {"description": "Monthly Payroll", "net": 250},
+                    {"description": "VAT Service", "net": 400},
+                ],
+            }
+        ],
+    )
+    assert result["mode"] == "preview_from_xero_invoices"
+    assert result["binding"] is False
+    assert result["has_fyi_allocation_plan"] is False
+    month = result["months"][0]
+    assert month["invoice_net_total"] == 650.0
+    assert month["matched_interim"]["found"] is True
+    assert month["matched_interim"]["total"] == 650.0
+    assert month["split_state"] == "unsplit"
+    assert month["amount_check"] == "matches"
+    # VAT Service line should suggest the VAT job; every service line here matches a job.
+    assert month["service_lines_without_job"] == []
+
+
+async def test_preview_flags_invoice_without_interim_and_amount_mismatch(
+    fake_api, read_settings
+) -> None:
+    service = AutoFYIService(fake_api, read_settings)
+    result = await service.preview_split_from_invoices(
+        "C-200",
+        [
+            {
+                "reference": "INV-AUG",
+                "date": "01 Aug 2026",
+                "lines": [{"description": "Monthly Payroll", "net": 300}],
+            }
+        ],
+    )
+    month = result["months"][0]
+    assert month["matched_interim"]["found"] is False
+    assert result["invoices_without_interim"] == [
+        {"invoice_reference": "INV-AUG", "invoice_date": "01 Aug 2026"}
+    ]
+    # The unmatched July interim (650) should surface too.
+    assert {"date": "01 Jul 2026", "amount": 650} in result["interims_without_invoice"]
+
+
+async def test_preview_warns_when_client_already_has_plan(fake_api, read_settings) -> None:
+    service = AutoFYIService(fake_api, read_settings)
+    result = await service.preview_split_from_invoices(
+        "C-100",
+        [
+            {
+                "date": "01 Jul 2026",
+                "lines": [{"description": "Monthly Payroll", "net": 650}],
+            }
+        ],
+    )
+    assert result["has_fyi_allocation_plan"] is True
+    assert any("operational source of truth" in w for w in result["warnings"])
+
+
+async def test_preview_requires_at_least_one_invoice(fake_api, read_settings) -> None:
+    service = AutoFYIService(fake_api, read_settings)
+    with pytest.raises(BusinessRuleError):
+        await service.preview_split_from_invoices("C-200", [])

@@ -101,6 +101,33 @@ classified as:
 It also reports remaining, consumed, and same-amount ambiguous service candidates. This is the
 preferred read before split or allocation.
 
+### `preview_split_from_invoices(client_id, invoices)`
+
+Read-only fallback for clients with **no prepared FYI allocation plan**. Where
+`inspect_client_billing_state` takes the service-line breakdown from the FYI allocation plan,
+this tool takes it from Xero invoices you pass in, then reuses the same reconciliation logic
+against the live FYI interims and jobs.
+
+Two-server flow (nothing here is written back):
+
+1. Use the Xero MCP tools (`list-contacts`, `list-invoices`) to pull the client's invoices and
+   their service lines. The user chooses the correct contact.
+2. Pass them to this tool as `invoices`: a list of
+   `{reference, date, lines: [{description, net}]}`. Duplicate descriptions are summed.
+3. The tool fetches live FYI jobs and interims and returns, per month:
+   - `service_lines` — the split implied by that month's invoice,
+   - `matched_interim` and `split_state` (same classification as above),
+   - `amount_check` — whether the FYI interim total equals the invoice net,
+   - `allocation_suggestions` — candidate FYI jobs per service line (exact-month matches ranked
+     first), and `service_lines_without_job` for lines with no plausible job.
+4. It also lists `invoices_without_interim`, `interims_without_invoice`, and `unmatched_jobs`.
+
+The result is a non-binding preview (`binding: false`). Job matches are suggestions, not
+allocations. If the client already has a prepared FYI plan, the tool still runs but warns that
+the plan — not this preview — is the operational source of truth. Posting a real split or
+allocation continues to require a prepared FYI allocation plan through the prepare/confirm/execute
+tools.
+
 ## No-write planning
 
 ### `plan_client_billing(client_id, target_month, target_year, invoice_key=None)`

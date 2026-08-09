@@ -268,6 +268,115 @@ def interim_rows_for_date(interims: Iterable[dict[str, Any]], wanted: str) -> li
     return [row for row in interims if parse_date(row.get("date")) == target]
 
 
+def interim_rows_for_month(
+    interims: Iterable[dict[str, Any]], year: int, month: int
+) -> list[dict[str, Any]]:
+    """FYI interim rows whose date falls in one calendar month (day may differ from the invoice)."""
+    result: list[dict[str, Any]] = []
+    for row in interims:
+        parsed = parse_date(row.get("date"))
+        if parsed is not None and parsed.year == year and parsed.month == month:
+            result.append(row)
+    return result
+
+
+def invoice_service_lines(invoice: dict[str, Any]) -> tuple[dict[str, float], list[str]]:
+    """Turn one Xero invoice's lines into the {description: net} shape the split logic expects.
+
+    Duplicate descriptions are summed (with a warning) so a preview never silently drops money.
+    """
+    lines = invoice.get("lines")
+    if not isinstance(lines, list) or not lines:
+        raise BusinessRuleError("Each preview invoice needs at least one service line.")
+    result: dict[str, float] = {}
+    warnings: list[str] = []
+    for index, line in enumerate(lines):
+        if not isinstance(line, dict):
+            raise BusinessRuleError(f"Invoice line {index + 1} is not an object.")
+        name = str(line.get("description") or "").strip()
+        if not name:
+            raise BusinessRuleError(f"Invoice line {index + 1} has an empty description.")
+        net = money(line.get("net"), label=f"invoice line {name!r} net")
+        if net <= 0:
+            raise BusinessRuleError(f"Invoice service line {name!r} must have a positive net amount.")
+        if name in result:
+            warnings.append(
+                f"Invoice repeats service line {name!r}; the preview sums the duplicate net amounts."
+            )
+            result[name] = amount_float(money(result[name]) + net)
+        else:
+            result[name] = amount_float(net)
+    return result, warnings
+
+
+# Curated service keywords keep job suggestions predictable instead of fuzzy token soup.
+_SERVICE_MATCH_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("rct", ("rct",)),
+    ("vat", ("vat",)),
+    ("xero", ("xero",)),
+    ("subscription", ("xero", "subscription")),
+    ("payroll", ("payroll", "wages")),
+    ("wages", ("payroll", "wages")),
+    ("income tax", ("income tax", "tax", "accounts")),
+    ("bookkeeping", ("bookkeeping", "vat")),
+    ("accounts", ("accounts",)),
+    ("client care", ("client care",)),
+)
+
+
+def service_search_terms(description: str) -> set[str]:
+    """Job-name search terms for one invoice service line, from a curated accounting map."""
+    norm = normalized(description)
+    terms: set[str] = set()
+    for key, mapped in _SERVICE_MATCH_TERMS:
+        if key in norm:
+            terms.update(mapped)
+    if not terms:
+        terms = {word for word in norm.split() if len(word) > 3}
+    return terms
+
+
+def suggest_jobs_for_service(
+    description: str, jobs: Iterable[dict[str, Any]], month: int, year: int
+) -> list[dict[str, Any]]:
+    """Suggest (never assign) live FYI jobs a service line could map to, period matches first."""
+    terms = service_search_terms(description)
+    month_token = MONTH_NAMES[month - 1].casefold() if 1 <= month <= 12 else ""
+    year_token = str(year)
+    candidates: list[dict[str, Any]] = []
+    for job in jobs:
+        if not isinstance(job, dict) or job.get("is_billing_job"):
+            continue
+        name = str(job.get("job_name") or job.get("name") or "").strip()
+        if not name:
+            continue
+        normalized_name = normalized(name)
+        if not any(term in normalized_name for term in terms):
+            continue
+        month_match = bool(month_token and month_token in normalized_name)
+        year_match = year_token in normalized_name
+        candidates.append(
+            {
+                "job_name": name,
+                "work_amount": job.get("work_amount"),
+                "period_match": month_match or year_match,
+                "_month_match": month_match,
+                "_year_match": year_match,
+            }
+        )
+    # Rank exact-month matches above year-only matches above the rest, then by name.
+    candidates.sort(
+        key=lambda item: (
+            not item["_month_match"],
+            not item["_year_match"],
+            normalized(item["job_name"]),
+        )
+    )
+    for item in candidates:
+        del item["_month_match"], item["_year_match"]
+    return candidates
+
+
 def amount_multiset(values: Iterable[Any]) -> Counter[int]:
     return Counter(int((money(value) * 100).to_integral_value()) for value in values)
 

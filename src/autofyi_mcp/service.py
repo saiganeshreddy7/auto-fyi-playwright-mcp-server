@@ -16,22 +16,32 @@ from autofyi_mcp.business import (
     equal_divide,
     find_service_line,
     interim_rows_for_date,
+    interim_rows_for_month,
+    invoice_service_lines,
     job_date,
     money,
     name_relation,
     normalized,
+    parse_date,
     plan_automation_blocker,
     plan_identity,
     repeat_day,
     select_allocation_plan,
     service_line_amount,
     service_lines,
+    suggest_jobs_for_service,
     summarize_client,
 )
 from autofyi_mcp.config import Settings
 from autofyi_mcp.confirmations import ConfirmationStore
 from autofyi_mcp.errors import APIError, BusinessRuleError
-from autofyi_mcp.models import AllocationJob, BillingMonth, CatalogFilter, DirectInvoiceJob
+from autofyi_mcp.models import (
+    AllocationJob,
+    BillingMonth,
+    CatalogFilter,
+    DirectInvoiceJob,
+    PreviewInvoice,
+)
 
 
 def _unwrap_job_response(response: dict[str, Any], operation: str) -> dict[str, Any]:
@@ -91,6 +101,7 @@ class AutoFYIService:
                 "Never retry an uncertain write after a timeout; inspect FYI first.",
                 "Catalog analytics describe the last imported FYI CSV snapshot, not live jobs or interims.",
                 "Clarify whether 'VAT jobs' means VAT registered, VAT processing, an allocation service, a live FYI job, or a remaining interim.",
+                "With no prepared FYI plan, preview_split_from_invoices reconciles Xero invoice lines against live interims and jobs as a read-only preview; it never posts a split, allocation, or invoice.",
             ],
             "tools_by_stage": {
                 "discover": [
@@ -107,6 +118,7 @@ class AutoFYIService:
                     "get_client_jobs_to_invoice",
                     "get_jobs_and_interim_table",
                     "inspect_client_billing_state",
+                    "preview_split_from_invoices",
                 ],
                 "plan": [
                     "plan_client_billing",
@@ -315,6 +327,151 @@ class AutoFYIService:
         return {
             "client": {"id": wrapper["id"], "name": wrapper["name"]},
             **data,
+        }
+
+    async def preview_split_from_invoices(
+        self,
+        client_id: str,
+        invoices: list[PreviewInvoice],
+    ) -> dict[str, Any]:
+        """Read-only preview: split live FYI interims using Xero invoice service lines.
+
+        For clients with no prepared FYI allocation plan, the Xero invoice lines stand in as the
+        service-line source of truth. Nothing is split, allocated, or invoiced. Job matches are
+        suggestions only. When a prepared FYI plan already exists, the split flow is authoritative.
+        """
+        invoice_models = [PreviewInvoice.model_validate(invoice) for invoice in invoices]
+        if not invoice_models:
+            raise BusinessRuleError("Provide at least one Xero invoice to preview.")
+
+        wrapper = await self._client_wrapper(client_id)
+        info = wrapper["client_info"]
+        plans = allocation_candidates(info)
+        data, _ = await self._jobs_interims(wrapper, None)
+        interims = data.get("interims") if isinstance(data.get("interims"), list) else []
+        jobs = data.get("jobs") if isinstance(data.get("jobs"), list) else []
+
+        warnings: list[str] = []
+        months: list[dict[str, Any]] = []
+        matched_interim_months: set[tuple[int, int]] = set()
+        suggested_job_names: set[str] = set()
+
+        for invoice in invoice_models:
+            service_line_map, line_warnings = invoice_service_lines(
+                {"lines": [line.model_dump() for line in invoice.lines]}
+            )
+            warnings.extend(line_warnings)
+            invoice_net = amount_float(
+                sum((money(value) for value in service_line_map.values()), Decimal("0"))
+            )
+            parsed = parse_date(invoice.date)
+            entry: dict[str, Any] = {
+                "invoice_reference": invoice.reference or None,
+                "invoice_date": invoice.date,
+                "invoice_net_total": invoice_net,
+                "service_lines": service_line_map,
+            }
+
+            if parsed is None:
+                entry["split_state"] = "unreadable_invoice_date"
+                entry["note"] = "Invoice date could not be parsed; cannot match an FYI interim."
+                months.append(entry)
+                continue
+
+            matched_interim_months.add((parsed.year, parsed.month))
+            rows = interim_rows_for_month(interims, parsed.year, parsed.month)
+            readable = [
+                amount
+                for row in rows
+                if (amount := _number_from_ui(row.get("amount"))) is not None
+            ]
+            state = classify_month_billing_state(service_line_map, readable)
+            interim_total = state["live_total"]
+            entry.update(
+                {
+                    "matched_interim": {
+                        "found": bool(rows),
+                        "rows": state["live_rows"],
+                        "total": interim_total,
+                    },
+                    "split_state": state["state"],
+                    "amount_check": (
+                        "matches"
+                        if not rows or amounts_equal(money(interim_total), money(invoice_net))
+                        else f"MISMATCH: interim total {interim_total:.2f} vs invoice net {invoice_net:.2f}"
+                    ),
+                    "remaining_services": state["remaining_services"],
+                    "consumed_services": state["consumed_services"],
+                }
+            )
+
+            allocation: list[dict[str, Any]] = []
+            for service, amount in service_line_map.items():
+                candidates = suggest_jobs_for_service(service, jobs, parsed.month, parsed.year)
+                for candidate in candidates:
+                    suggested_job_names.add(normalized(candidate["job_name"]))
+                allocation.append(
+                    {
+                        "service": service,
+                        "amount": amount,
+                        "suggested_jobs": candidates,
+                        "matched": bool(candidates),
+                    }
+                )
+            entry["allocation_suggestions"] = allocation
+            entry["service_lines_without_job"] = [
+                row["service"] for row in allocation if not row["matched"]
+            ]
+            months.append(entry)
+
+        invoiced_months = {
+            (parsed.year, parsed.month)
+            for invoice in invoice_models
+            if (parsed := parse_date(invoice.date)) is not None
+        }
+        interims_without_invoice = [
+            {"date": row.get("date"), "amount": row.get("amount")}
+            for row in interims
+            if (parsed := parse_date(row.get("date"))) is not None
+            and (parsed.year, parsed.month) not in invoiced_months
+        ]
+        invoices_without_interim = [
+            {"invoice_reference": entry["invoice_reference"], "invoice_date": entry["invoice_date"]}
+            for entry in months
+            if isinstance(entry.get("matched_interim"), dict)
+            and not entry["matched_interim"]["found"]
+        ]
+        unmatched_jobs = [
+            {"job_name": job.get("job_name"), "work_amount": job.get("work_amount")}
+            for job in jobs
+            if isinstance(job, dict)
+            and not job.get("is_billing_job")
+            and normalized(job.get("job_name")) not in suggested_job_names
+        ]
+
+        if plans:
+            warnings.insert(
+                0,
+                "This client already has a prepared FYI allocation plan. That plan is the "
+                "operational source of truth; use inspect_client_billing_state and "
+                "prepare_interim_split instead of this Xero-invoice preview to make changes.",
+            )
+
+        return {
+            "client": {"id": wrapper["id"], "name": wrapper["name"]},
+            "mode": "preview_from_xero_invoices",
+            "binding": False,
+            "note": (
+                "Read-only preview. Nothing was split, allocated, or invoiced. Service-line "
+                "amounts come from the supplied Xero invoices; job matches are suggestions only. "
+                "Posting a real split/allocation still requires a prepared FYI allocation plan."
+            ),
+            "has_fyi_allocation_plan": bool(plans),
+            "months": months,
+            "invoices_without_interim": invoices_without_interim,
+            "interims_without_invoice": interims_without_invoice,
+            "unmatched_jobs": unmatched_jobs,
+            "warnings": warnings,
         }
 
     async def inspect_client_billing_state(

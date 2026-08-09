@@ -36,6 +36,32 @@ class DirectInvoiceJob(BaseModel):
         return value.strip()
 
 
+class PreviewInvoiceLine(BaseModel):
+    """One service line read from a Xero invoice, used only for read-only split preview."""
+
+    description: str = Field(min_length=1)
+    net: float = Field(gt=0, description="Net (tax-exclusive) amount of this service line")
+    gross: float | None = Field(default=None, gt=0)
+
+    @field_validator("description")
+    @classmethod
+    def clean_description(cls, value: str) -> str:
+        return value.strip()
+
+
+class PreviewInvoice(BaseModel):
+    """One Xero invoice supplied for read-only split/allocation preview. Never written back."""
+
+    reference: str = ""
+    date: str = Field(min_length=1, description="Invoice date, e.g. '01 Oct 2025' or '2025-10-01'")
+    lines: list[PreviewInvoiceLine] = Field(min_length=1)
+
+    @field_validator("reference")
+    @classmethod
+    def clean_reference(cls, value: str) -> str:
+        return value.strip()
+
+
 class CatalogFilter(BaseModel):
     """One allowlisted filter for the imported FYI client catalog; never raw SQL."""
 

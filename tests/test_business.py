@@ -9,12 +9,15 @@ from autofyi_mcp.business import (
     classify_month_billing_state,
     equal_divide,
     find_service_line,
+    interim_rows_for_month,
+    invoice_service_lines,
     job_date,
     money,
     name_relation,
     plan_automation_blocker,
     select_allocation_plan,
     service_lines,
+    suggest_jobs_for_service,
 )
 from autofyi_mcp.errors import BusinessRuleError
 
@@ -174,3 +177,72 @@ def test_partial_duplicate_amounts_are_reported_as_ambiguous() -> None:
             "reason": "FYI rows contain date and amount but no service label.",
         }
     ]
+
+
+def test_invoice_service_lines_sums_duplicate_descriptions() -> None:
+    invoice = {
+        "lines": [
+            {"description": "Xero Subscription", "net": 40},
+            {"description": "Wages Processing", "net": 120},
+            {"description": "Xero Subscription", "net": 35},
+        ]
+    }
+    lines, warnings = invoice_service_lines(invoice)
+    assert lines == {"Xero Subscription": 75.0, "Wages Processing": 120.0}
+    assert any("repeats service line" in w for w in warnings)
+
+
+@pytest.mark.parametrize("net", [0, -5])
+def test_invoice_service_lines_rejects_nonpositive_net(net: float) -> None:
+    with pytest.raises(BusinessRuleError):
+        invoice_service_lines({"lines": [{"description": "VAT", "net": net}]})
+
+
+def test_invoice_service_lines_requires_lines() -> None:
+    with pytest.raises(BusinessRuleError):
+        invoice_service_lines({"lines": []})
+
+
+def test_invoice_split_reuses_billing_state_logic() -> None:
+    # A €300 interim against a 3-line invoice should classify as unsplit (single lump row).
+    lines, _ = invoice_service_lines(
+        {
+            "lines": [
+                {"description": "Monthly Fee", "net": 260},
+                {"description": "Xero Subscription", "net": 40},
+            ]
+        }
+    )
+    state = classify_month_billing_state(lines, [300])
+    assert state["state"] == "unsplit"
+    assert state["expected_invoice_net"] == 300.0
+
+
+def test_interim_rows_for_month_matches_by_month_not_day() -> None:
+    interims = [
+        {"date": "01 Oct 2025", "amount": "300.00"},
+        {"date": "15 Oct 2025", "amount": "50.00"},
+        {"date": "01 Nov 2025", "amount": "300.00"},
+    ]
+    rows = interim_rows_for_month(interims, 2025, 10)
+    assert [row["amount"] for row in rows] == ["300.00", "50.00"]
+
+
+def test_suggest_jobs_prefers_period_match_and_skips_billing_job() -> None:
+    jobs = [
+        {"job_name": "RCT - October 2025", "work_amount": 157.5, "is_billing_job": False},
+        {"job_name": "RCT - November 2025", "work_amount": 171.25, "is_billing_job": False},
+        {"job_name": "VAT Return - Sept-Oct 2025", "work_amount": 215.0, "is_billing_job": False},
+        {"job_name": "Billing Job - Example", "work_amount": -500.0, "is_billing_job": True},
+    ]
+    result = suggest_jobs_for_service("Monthly RCT Compliance", jobs, month=10, year=2025)
+    names = [candidate["job_name"] for candidate in result]
+    # October is an exact-month match so it ranks above the year-only November match.
+    assert names == ["RCT - October 2025", "RCT - November 2025"]
+    assert all(candidate["period_match"] is True for candidate in result)
+    assert "_month_match" not in result[0]
+
+
+def test_suggest_jobs_returns_empty_when_no_matching_service() -> None:
+    jobs = [{"job_name": "RCT - October 2025", "work_amount": 157.5, "is_billing_job": False}]
+    assert suggest_jobs_for_service("Income tax & accounts", jobs, month=10, year=2025) == []

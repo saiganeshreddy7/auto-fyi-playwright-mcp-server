@@ -14,6 +14,7 @@ def test_expected_mcp_tools_are_registered() -> None:
         "get_client_information",
         "get_client_jobs_to_invoice",
         "get_jobs_and_interim_table",
+        "preview_split_from_invoices",
         "inspect_client_billing_state",
         "plan_client_billing",
         "prepare_interim_split",

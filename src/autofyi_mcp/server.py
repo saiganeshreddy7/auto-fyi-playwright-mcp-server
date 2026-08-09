@@ -12,7 +12,13 @@ from starlette.responses import JSONResponse
 
 from autofyi_mcp.api import AutoFYIAPI
 from autofyi_mcp.config import Settings
-from autofyi_mcp.models import AllocationJob, BillingMonth, CatalogFilter, DirectInvoiceJob
+from autofyi_mcp.models import (
+    AllocationJob,
+    BillingMonth,
+    CatalogFilter,
+    DirectInvoiceJob,
+    PreviewInvoice,
+)
 from autofyi_mcp.service import AutoFYIService
 
 logging.basicConfig(
@@ -139,6 +145,15 @@ async def get_client_jobs_to_invoice(client_id: str) -> dict:
 async def get_jobs_and_interim_table(client_id: str) -> dict:
     """Read live FYI jobs plus billing-job interim dates and amounts. Makes no FYI changes but may take minutes."""
     return await service.get_jobs_and_interim_table(client_id)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def preview_split_from_invoices(
+    client_id: str,
+    invoices: list[PreviewInvoice],
+) -> dict:
+    """Read-only preview when a client has no FYI allocation plan: split live FYI interims using Xero invoice service lines and suggest job matches. Writes nothing. Fetch the invoices first with the Xero tools."""
+    return await service.preview_split_from_invoices(client_id, invoices)
 
 
 @mcp.tool(annotations=READ_ONLY)
